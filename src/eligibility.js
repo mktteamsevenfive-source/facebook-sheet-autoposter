@@ -52,7 +52,8 @@ export function eligibilityReason(row, rows, now = new Date(), timezone = 'Asia/
   if (!scheduledDate || scheduledDate.year !== today.year || scheduledDate.month !== today.month || scheduledDate.day !== today.day) {
     return 'Scheduled Date is not today';
   }
-  const minutes = scheduledMinutes(row['Scheduled Time']);
+  const timeText = String(row['Scheduled Time'] ?? '').trim();
+  const minutes = timeText ? scheduledMinutes(timeText) : 0;
   if (minutes === null) return 'Scheduled Time is invalid';
   if (minutes > today.hour * 60 + today.minute) return 'Scheduled Time is not due';
   if (normalized(row['Approval Status']) !== 'approved') return 'Approval Status is not Approved';
@@ -67,9 +68,13 @@ export function eligibilityReason(row, rows, now = new Date(), timezone = 'Asia/
   return null;
 }
 
+function sortMinutes(row) {
+  return scheduledMinutes(row['Scheduled Time']) ?? 0;
+}
+
 export function selectOldestEligible(rows, now = new Date(), timezone = 'Asia/Bangkok', knownAccounts = null) {
   return rows
     .filter((row) => eligibilityReason(row, rows, now, timezone, knownAccounts) === null)
-    .sort((a, b) => scheduledMinutes(a['Scheduled Time']) - scheduledMinutes(b['Scheduled Time']) || a.__rowNumber - b.__rowNumber)[0] || null;
+    .sort((a, b) => sortMinutes(a) - sortMinutes(b) || a.__rowNumber - b.__rowNumber)[0] || null;
 }
 

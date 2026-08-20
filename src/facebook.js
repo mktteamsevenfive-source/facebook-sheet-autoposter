@@ -29,10 +29,10 @@ async function assertNoBlockingIssue(page) {
 async function verifyFacebookAccount(page, expectedDisplayName) {
   await page.goto('https://www.facebook.com/me', { waitUntil: 'domcontentloaded' });
   await assertNoBlockingIssue(page);
-  const heading = cleanText(await page.locator('h1').first().innerText({ timeout: 20000 }).catch(() => '')).trim();
+  const text = await pageText(page);
   const expected = cleanText(expectedDisplayName).trim();
-  if (!heading || !expected || !heading.toLocaleLowerCase().includes(expected.toLocaleLowerCase())) {
-    throw new Error(`Facebook account mismatch: expected "${expected}", current profile heading is "${heading || 'unknown'}"`);
+  if (!expected || !text.toLocaleLowerCase().includes(expected.toLocaleLowerCase())) {
+    throw new Error(`Facebook account mismatch: expected "${expected}" not found on profile page`);
   }
 }
 
@@ -41,11 +41,12 @@ async function openComposer(page) {
   let opener = null;
   for (const pattern of patterns) {
     const candidate = page.locator('[role="button"]').filter({ hasText: pattern }).first();
-    if (await candidate.isVisible().catch(() => false)) { opener = candidate; break; }
+    const found = await candidate.waitFor({ state: 'visible', timeout: 8000 }).then(() => true).catch(() => false);
+    if (found) { opener = candidate; break; }
   }
   if (!opener) throw new Error('Facebook group-rule problem: posting composer is unavailable; verify membership and posting permission');
   await opener.click();
-  const dialog = page.locator('[role="dialog"]').last();
+  const dialog = page.getByRole('dialog', { name: /create (?:a )?(?:public )?post|สร้างโพสต์/i }).first();
   await dialog.waitFor({ state: 'visible', timeout: 30000 });
   return dialog;
 }
@@ -58,7 +59,7 @@ async function attachMedia(page, dialog, mediaPaths, timeoutMs) {
     return;
   }
   const button = dialog.getByRole('button', { name: /photo\/video|รูปภาพ\/วิดีโอ|รูป\/วิดีโอ/i }).first();
-  if (!await button.isVisible().catch(() => false)) throw new Error('Facebook media control was not found');
+  await button.waitFor({ state: 'visible', timeout: 30000 }).catch(() => { throw new Error('Facebook media control was not found'); });
   const chooserPromise = page.waitForEvent('filechooser', { timeout: 30000 });
   await button.click();
   const chooser = await chooserPromise;
@@ -77,20 +78,27 @@ async function addFailureScreenshot(config, page, row, error) {
   }
 }
 
-async function permalinkSet(page) {
-  const links = await page.locator('a[href*="/posts/"]').evaluateAll((nodes) => nodes.map((node) => node.href)).catch(() => []);
-  return new Set(links.map(normalizePermalink).filter(Boolean));
+function groupIdFromUrl(url) {
+  return String(url || '').match(/\/groups\/([^/?#]+)/)?.[1] || null;
 }
 
-function normalizePermalink(value) {
+function normalizePermalink(value, groupId) {
   const match = String(value || '').match(PERMALINK);
-  return match ? match[0].replace('://facebook.com', '://www.facebook.com') + '/' : null;
+  if (!match) return null;
+  const normalized = match[0].replace('://facebook.com', '://www.facebook.com') + '/';
+  if (groupId && !normalized.includes(`/groups/${groupId}/posts/`)) return null;
+  return normalized;
 }
 
-async function findNewPermalink(page, before, caption) {
+async function permalinkSet(page, groupId) {
+  const links = await page.locator('a[href*="/posts/"]').evaluateAll((nodes) => nodes.map((node) => node.href)).catch(() => []);
+  return new Set(links.map((link) => normalizePermalink(link, groupId)).filter(Boolean));
+}
+
+async function findNewPermalink(page, before, caption, groupId) {
   for (let attempt = 0; attempt < 6; attempt += 1) {
     await page.waitForTimeout(attempt === 0 ? 3000 : 5000);
-    const after = await permalinkSet(page);
+    const after = await permalinkSet(page, groupId);
     const created = [...after].find((url) => !before.has(url));
     if (created) return created;
     const needle = cleanText(caption).trim().slice(0, 48);
@@ -98,7 +106,7 @@ async function findNewPermalink(page, before, caption) {
       const article = page.locator('[role="article"]').filter({ hasText: needle }).first();
       if (await article.isVisible().catch(() => false)) {
         const href = await article.locator('a[href*="/posts/"]').first().getAttribute('href').catch(() => null);
-        const normalized = normalizePermalink(href);
+        const normalized = normalizePermalink(href, groupId);
         if (normalized) return normalized;
       }
     }
@@ -127,9 +135,10 @@ export async function prepareFacebookPost({ config, account, row, mediaPaths }) 
   let submissionStarted = false;
   try {
     await verifyFacebookAccount(page, account.expectedDisplayName);
+    const groupId = groupIdFromUrl(row['Facebook Group URL']);
     await page.goto(String(row['Facebook Group URL']), { waitUntil: 'domcontentloaded' });
     await assertNoBlockingIssue(page);
-    const before = await permalinkSet(page);
+    const before = await permalinkSet(page, groupId);
     const dialog = await openComposer(page);
     await assertNoBlockingIssue(page);
     await attachMedia(page, dialog, mediaPaths, config.uploadTimeoutMs);
@@ -152,7 +161,7 @@ export async function prepareFacebookPost({ config, account, row, mediaPaths }) 
           await dialog.waitFor({ state: 'hidden', timeout: config.uploadTimeoutMs }).catch(() => {});
           const body = await pageText(page);
           const submittedForReview = /submitted for review|pending post|waiting for admin approval|ส่งให้ตรวจสอบแล้ว|รอการอนุมัติ|โพสต์ที่รอดำเนินการ/i.test(body);
-          const actualUrl = await findNewPermalink(page, before, caption);
+          const actualUrl = await findNewPermalink(page, before, caption, groupId);
           return {
             status: submittedForReview ? 'Submitted for review' : 'Posted',
             postedUrl: actualUrl || (submittedForReview

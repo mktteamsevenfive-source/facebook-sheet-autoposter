@@ -83,7 +83,7 @@ export async function formatDurationCell(sheets, config, headers, rowNumber) {
             startColumnIndex: index,
             endColumnIndex: index + 1
           },
-          cell: { userEnteredFormat: { numberFormat: { type: 'DURATION', pattern: '[h]:mm:ss' } } },
+          cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '[h]:mm:ss' } } },
           fields: 'userEnteredFormat.numberFormat'
         }
       }]
