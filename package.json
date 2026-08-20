@@ -1,0 +1,21 @@
+{
+  "name": "facebook-sheet-autoposter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "One-row-at-a-time Google Sheets to Facebook Group autoposter for Windows.",
+  "scripts": {
+    "start": "node src/run.js",
+    "dry-run": "node src/run.js --dry-run",
+    "login:google": "node src/login-google.js",
+    "login:facebook": "node src/login-facebook.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "googleapis": "176.0.0",
+    "playwright": "1.62.1"
+  }
+}

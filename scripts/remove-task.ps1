@@ -1,0 +1,8 @@
+param(
+    [string]$TaskName = 'FacebookGoogleSheetAutoposter'
+)
+
+$ErrorActionPreference = 'Stop'
+Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+Write-Host "Scheduled task removed: $TaskName"
+

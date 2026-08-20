@@ -1,0 +1,19 @@
+{
+  "accounts": [
+    {
+      "sheetAccount": "Thep Arthur",
+      "expectedDisplayName": "Thep Arthur",
+      "profileDir": "./data/facebook-profiles/thep-arthur"
+    },
+    {
+      "sheetAccount": "sonthep simmalee",
+      "expectedDisplayName": "Thep Arthur",
+      "profileDir": "./data/facebook-profiles/thep-arthur"
+    },
+    {
+      "sheetAccount": "arunee tangkamolsuk",
+      "expectedDisplayName": "arunee tangkamolsuk",
+      "profileDir": "./data/facebook-profiles/arunee-tangkamolsuk"
+    }
+  ]
+}
