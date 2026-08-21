@@ -122,7 +122,7 @@ export async function launchFacebookContext(config, account) {
     viewport: { width: 1440, height: 1000 },
     locale: 'en-GB',
     timezoneId: config.timezone,
-    args: ['--disable-notifications']
+    args: ['--disable-notifications', '--window-position=-32000,-32000']
   });
   context.setDefaultTimeout(config.navigationTimeoutMs);
   context.setDefaultNavigationTimeout(config.navigationTimeoutMs);
