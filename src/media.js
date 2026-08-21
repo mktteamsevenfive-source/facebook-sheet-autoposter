@@ -18,7 +18,17 @@ async function mediaFilesInDirectory(directory) {
     .sort((a, b) => path.basename(a).localeCompare(path.basename(b), 'en', { numeric: true }));
 }
 
-async function existingMedia(localPath) {
+async function resolveLocalCopy(candidate, mediaDir, largeFileBytes) {
+  if (path.resolve(path.dirname(candidate)) === path.resolve(mediaDir)) return candidate;
+  const stat = await fsp.stat(candidate);
+  if (stat.size <= largeFileBytes) return candidate;
+  await fsp.mkdir(mediaDir, { recursive: true });
+  const destination = path.join(mediaDir, sanitizeFileName(path.basename(candidate)));
+  if (!fs.existsSync(destination)) await fsp.copyFile(candidate, destination);
+  return destination;
+}
+
+async function existingMedia(localPath, mediaDir, largeFileBytes) {
   const candidates = String(localPath || '').split(/[;|]/).map((item) => item.trim()).filter(Boolean);
   if (!candidates.length) return [];
   const found = [];
@@ -28,7 +38,9 @@ async function existingMedia(localPath) {
     if (stat.isDirectory()) found.push(...await mediaFilesInDirectory(candidate));
     else if (MEDIA_EXTENSIONS.has(path.extname(candidate).toLowerCase())) found.push(candidate);
   }
-  return found;
+  const resolved = [];
+  for (const file of found) resolved.push(await resolveLocalCopy(file, mediaDir, largeFileBytes));
+  return resolved;
 }
 
 function driveIdFromUrl(url) {
@@ -104,16 +116,21 @@ async function downloadHttp(url, mediaDir, postId) {
   return target;
 }
 
-export async function ensureMedia({ row, drive, mediaDir, onLocalPath }) {
-  const reused = await existingMedia(row['Local Media Path']);
-  if (reused.length) return reused;
+export async function ensureMedia({ row, drive, mediaDir, onLocalPath, largeFileBytes = 100 * 1024 * 1024 }) {
+  const original = String(row['Local Media Path'] || '').trim();
+  const reused = await existingMedia(original, mediaDir, largeFileBytes);
+  if (reused.length) {
+    const resolved = reused.join(';');
+    if (resolved !== original) await onLocalPath(resolved);
+    return reused;
+  }
   const mediaUrl = String(row['Media URL 1'] || '').trim();
   if (!mediaUrl) return [];
   await fsp.mkdir(mediaDir, { recursive: true });
   const postId = String(row['Post ID'] || row.__rowNumber);
   const localPath = await downloadFromDrive(drive, mediaUrl, mediaDir, postId)
     || await downloadHttp(mediaUrl, mediaDir, postId);
-  const files = await existingMedia(localPath);
+  const files = await existingMedia(localPath, mediaDir, largeFileBytes);
   if (!files.length) throw new Error(`No supported media files were found at ${localPath}`);
   await onLocalPath(localPath);
   return files;

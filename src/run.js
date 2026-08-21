@@ -33,6 +33,30 @@ function replaceRow(rows, row) {
   return rows.map((candidate) => candidate.__rowNumber === row.__rowNumber ? row : candidate);
 }
 
+async function prefetchMissingMedia({ sheets, config, headers, rows, drive }) {
+  const candidates = rows.filter((row) =>
+    String(row['Local Media Path'] || '').trim() === '' &&
+    String(row['Media URL 1'] || '').trim() !== '' &&
+    String(row['Posted URL'] || '').trim() === ''
+  );
+  for (const row of candidates) {
+    try {
+      await ensureMedia({
+        row,
+        drive,
+        mediaDir: config.mediaDir,
+        largeFileBytes: config.largeMediaThresholdBytes,
+        onLocalPath: async (localPath) => {
+          await updateRow(sheets, config, headers, row.__rowNumber, { 'Local Media Path': localPath });
+        }
+      });
+      log('media-prefetched', { row: row.__rowNumber, postId: row['Post ID'] });
+    } catch (error) {
+      log('media-prefetch-failed', { row: row.__rowNumber, postId: row['Post ID'], message: error.message });
+    }
+  }
+}
+
 async function writeTerminalState({ sheets, config, headers, row, startMs, updates }) {
   const elapsedDays = (Date.now() - startMs) / 86400000;
   await updateRow(sheets, config, headers, row.__rowNumber, { ...updates, 'time use': elapsedDays });
@@ -48,14 +72,17 @@ async function main() {
   let selected = null;
   let headers = null;
   let sheets = null;
+  let drive = null;
+  let table = null;
   let startMs = null;
   try {
     const accounts = readAccountConfig(config);
     const knownAccounts = new Set(accounts.map((item) => item.sheetAccount.trim().toLowerCase()));
     const clients = await getGoogleClients(config);
     sheets = clients.sheets;
+    drive = clients.drive;
     startMs = Date.now(); // starts immediately before the first Sheet cell read
-    const table = await readTable(sheets, config);
+    table = await readTable(sheets, config);
     headers = table.headers;
     selected = selectOldestEligible(table.rows, new Date(), config.timezone, knownAccounts);
     if (!selected) {
@@ -83,8 +110,9 @@ async function main() {
     const attempts = Number(selected['Attempt Count'] || 0);
     const mediaPaths = await ensureMedia({
       row: selected,
-      drive: clients.drive,
+      drive,
       mediaDir: config.mediaDir,
+      largeFileBytes: config.largeMediaThresholdBytes,
       onLocalPath: async (localPath) => {
         await updateRow(sheets, config, headers, selected.__rowNumber, { 'Local Media Path': localPath });
         selected['Local Media Path'] = localPath;
@@ -136,6 +164,12 @@ async function main() {
     process.exitCode = 1;
   } finally {
     if (prepared) await prepared.close().catch(() => {});
+    if (live && sheets && headers && table && drive) {
+      const rows = table.rows.filter((row) => row.__rowNumber !== selected?.__rowNumber);
+      await prefetchMissingMedia({ sheets, config, headers, rows, drive }).catch((error) => {
+        log('media-prefetch-run-failed', { message: error.message });
+      });
+    }
     await releaseLock();
   }
 }

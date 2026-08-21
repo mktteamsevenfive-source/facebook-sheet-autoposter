@@ -49,7 +49,8 @@ export function loadConfig() {
     chromeChannel: process.env.CHROME_CHANNEL || 'chrome',
     facebookHeadless: bool(process.env.FACEBOOK_HEADLESS, false),
     navigationTimeoutMs: Number(process.env.FACEBOOK_NAVIGATION_TIMEOUT_MS || 60000),
-    uploadTimeoutMs: Number(process.env.FACEBOOK_UPLOAD_TIMEOUT_MS || 180000)
+    uploadTimeoutMs: Number(process.env.FACEBOOK_UPLOAD_TIMEOUT_MS || 180000),
+    largeMediaThresholdBytes: Number(process.env.LARGE_MEDIA_THRESHOLD_MB || 100) * 1024 * 1024
   };
   if (!config.spreadsheetId || !config.sheetName || !Number.isInteger(config.sheetId)) {
     throw new Error('SPREADSHEET_ID, SHEET_NAME and SHEET_ID are required.');

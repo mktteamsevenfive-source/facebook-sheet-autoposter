@@ -1,6 +1,6 @@
 const REQUIRED_HEADERS = [
   'Post ID', 'Assigned Member', 'Facebook Account', 'Facebook Group Name', 'Facebook Group URL',
-  'Caption', 'Media Type', 'Media URL 1', 'Scheduled Date', 'Scheduled Time', 'Approval Status',
+  'Caption', 'Media Type', 'Media URL 1', 'Scheduled Date', 'Approval Status',
   'Posting Status', 'Attempt Count', 'Last Attempt At', 'Posted At', 'Posted URL', 'Error / Notes',
   'time use', 'Local Media Path'
 ];

@@ -148,6 +148,10 @@ export async function prepareFacebookPost({ config, account, row, mediaPaths }) 
     await editor.fill(caption);
     const actualCaption = cleanText(await editor.innerText());
     if (actualCaption !== caption) throw new Error('Caption verification failed: Facebook composer text differs from the Sheet');
+    // Typing a hashtag/mention can leave Facebook's suggestion popover open, which visually
+    // overlaps the Post button and blocks clicks on it. Blur (not click) to close it safely.
+    await editor.evaluate((node) => node.blur());
+    await page.waitForTimeout(500);
 
     const postButton = dialog.getByRole('button', { name: /^(post|โพสต์)$/i }).last();
     await postButton.waitFor({ state: 'visible', timeout: config.uploadTimeoutMs });
