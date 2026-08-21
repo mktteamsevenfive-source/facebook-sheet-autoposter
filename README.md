@@ -26,6 +26,10 @@ Facebook อาจเปลี่ยนหน้าเว็บได้ทุ�
 
 ต้องมี Node.js 20 ขึ้นไปและ Google Chrome ติดตั้งไว้ก่อน (สคริปต์ด้านล่างจะเช็คให้และเตือนถ้าไม่มี)
 
+**แบบไม่ต้องใช้ command line เลย** (เหมาะกับเครื่องเพื่อนร่วมทีมที่ไม่ถนัดสาย technical): แตกไฟล์ ZIP ของโปรเจกต์ วางไฟล์ `google-service-account.json` ไว้ในโฟลเดอร์เดียวกับ `install.bat` (ไม่ใส่ก็ได้ ค่อยวางทีหลัง) แล้ว**ดับเบิลคลิก `install.bat`** — จบ ติดตั้งให้ทั้งหมดอัตโนมัติเหมือนคำสั่งด้านล่าง
+
+**แบบใช้ PowerShell** (สำหรับคนที่ถนัด command line หรือจะ clone จาก GitHub ตรง ๆ):
+
 ```powershell
 git clone https://github.com/mktteamsevenfive-source/facebook-sheet-autoposter.git
 cd facebook-sheet-autoposter

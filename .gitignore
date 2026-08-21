@@ -6,3 +6,6 @@ secrets/
 logs/
 *.log
 
+# safety net: never commit a service account key dropped next to install.bat
+/google-service-account.json
+
