@@ -21,22 +21,45 @@ function Find-Chrome {
     return $null
 }
 
+function Sync-PathFromRegistry {
+    $machine = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $user = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+    $env:Path = "$machine;$user"
+}
+
+function Install-WithWinget($id, $friendlyName) {
+    if (-not (Test-CommandExists 'winget')) {
+        Write-Host "winget is not available on this machine, so $friendlyName can't be installed automatically." -ForegroundColor Yellow
+        return $false
+    }
+    Write-Host "$friendlyName not found - installing via winget (this may show a Windows admin permission prompt)..." -ForegroundColor Yellow
+    winget install --id $id -e --accept-package-agreements --accept-source-agreements --silent
+    Sync-PathFromRegistry
+    return $true
+}
+
 Write-Host "== Facebook Sheet Autoposter setup ==" -ForegroundColor Cyan
 
 if (-not (Test-CommandExists 'node')) {
-    throw "Node.js not found. Install Node.js 20+ from https://nodejs.org/ first."
+    Install-WithWinget 'OpenJS.NodeJS.LTS' 'Node.js' | Out-Null
+}
+if (-not (Test-CommandExists 'node')) {
+    throw "Node.js not found (auto-install failed or unavailable). Install Node.js 20+ from https://nodejs.org/, then re-run this script."
 }
 $nodeVersion = (node --version) -replace '^v', ''
 $majorVersion = [int]($nodeVersion.Split('.')[0])
 if ($majorVersion -lt 20) {
-    throw "Node.js $nodeVersion found, but 20+ is required."
+    throw "Node.js $nodeVersion found, but 20+ is required. Update Node.js and re-run this script."
 }
 Write-Host "Node.js $nodeVersion OK"
 
+if (-not (Find-Chrome)) {
+    Install-WithWinget 'Google.Chrome' 'Google Chrome' | Out-Null
+}
 if (Find-Chrome) {
     Write-Host "Google Chrome OK"
 } else {
-    Write-Host "Google Chrome not found in the usual install locations - install it from https://www.google.com/chrome/ before logging in to Facebook." -ForegroundColor Yellow
+    Write-Host "Google Chrome still not found - install it from https://www.google.com/chrome/ before logging in to Facebook." -ForegroundColor Yellow
 }
 
 Set-Location -LiteralPath $projectRoot
