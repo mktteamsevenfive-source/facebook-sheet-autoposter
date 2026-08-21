@@ -125,27 +125,27 @@ PUBLISH_ENABLED=true
 
 ทดสอบหนึ่งรอบด้วย `npm start` ก่อน คำสั่งนี้สามารถเผยแพร่โพสต์จริงได้ทันทีเมื่อพบแถว Approved ที่เข้าเกณฑ์
 
-## 6. ตั้งเวลาทุก 20 นาที
+## 6. ตั้งเวลา
 
-เปิด PowerShell ในบัญชี Windows เดียวกับที่ล็อกอิน Facebook แล้วรัน:
+เปิด PowerShell ในบัญชี Windows เดียวกับที่ล็อกอิน Facebook แล้วรัน (ค่าเริ่มต้นทุก 20 นาที):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install-task.ps1
 ```
 
-Task Scheduler จะเรียกโปรแกรมทุก 20 นาที และบันทึก log ที่ `logs\scheduled-task.log` เครื่องต้องเปิดอยู่ ผู้ใช้ Windows ต้องล็อกอินอยู่ และ session Facebook ต้องยังใช้งานได้
+หรือกำหนดความถี่เองด้วย `-IntervalMinutes` เช่น ทุก 5 หรือ 10 นาทีตอนทดสอบ:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-task.ps1 -IntervalMinutes 5
+powershell -ExecutionPolicy Bypass -File .\scripts\install-task.ps1 -IntervalMinutes 10
+```
+
+รันซ้ำได้เรื่อย ๆ เพื่อเปลี่ยนความถี่ทีหลัง (เขียนทับ task เดิม) Task Scheduler จะเรียกโปรแกรมตามรอบที่ตั้งไว้ และบันทึก log ที่ `logs\scheduled-task.log` เครื่องต้องเปิดอยู่ ผู้ใช้ Windows ต้องล็อกอินอยู่ และ session Facebook ต้องยังใช้งานได้
 
 ถ้าต้องการถอด Task:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\remove-task.ps1
-```
-
-ปรับความถี่ได้ด้วย `Set-ScheduledTask` เช่น เปลี่ยนเป็นทุก 10 นาทีเพื่อทดสอบ:
-
-```powershell
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration (New-TimeSpan -Days 3650)
-Set-ScheduledTask -TaskName 'FacebookGoogleSheetAutoposter' -Trigger $trigger
 ```
 
 ## การแก้ปัญหาเบื้องต้น

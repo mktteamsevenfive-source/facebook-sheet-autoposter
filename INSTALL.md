@@ -79,13 +79,22 @@ PUBLISH_ENABLED=true
 
 ทดสอบหนึ่งรอบด้วย `npm start` — คำสั่งนี้โพสต์จริงทันทีถ้ามีแถว Approved ที่เข้าเกณฑ์ ตรวจผลในชีตและใน Facebook ให้แน่ใจก่อนไปขั้นตอนต่อไป
 
-### 8. ตั้งเวลารันอัตโนมัติทุก 20 นาที
+### 8. ตั้งเวลารันอัตโนมัติ
+
+ค่าเริ่มต้นคือทุก 20 นาที:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install-task.ps1
 ```
 
-เสร็จแล้วเครื่องนี้จะเช็คชีตทุก 20 นาทีและโพสต์ตามเงื่อนไขเองอัตโนมัติ — เครื่องต้องเปิดอยู่และ login Windows ค้างไว้ตลอด
+หรือกำหนดความถี่เองด้วย `-IntervalMinutes` เช่น ทุก 5 นาที หรือทุก 10 นาที (เหมาะกับตอนทดสอบ ให้เห็นผลไวขึ้น):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-task.ps1 -IntervalMinutes 5
+powershell -ExecutionPolicy Bypass -File .\scripts\install-task.ps1 -IntervalMinutes 10
+```
+
+รันซ้ำเพื่อเปลี่ยนความถี่ทีหลังได้ตลอด (script เขียนทับ task เดิม) เสร็จแล้วเครื่องนี้จะเช็คชีตตามรอบที่ตั้งไว้และโพสต์ตามเงื่อนไขเองอัตโนมัติ — เครื่องต้องเปิดอยู่และ login Windows ค้างไว้ตลอด
 
 ถ้าต้องการถอด schedule ทีหลัง: `powershell -ExecutionPolicy Bypass -File .\scripts\remove-task.ps1`
 

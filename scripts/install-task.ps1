@@ -1,5 +1,6 @@
 param(
-    [string]$TaskName = 'FacebookGoogleSheetAutoposter'
+    [string]$TaskName = 'FacebookGoogleSheetAutoposter',
+    [int]$IntervalMinutes = 20
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,14 +17,14 @@ $action = New-ScheduledTaskAction `
     -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$runnerPath`"" `
     -WorkingDirectory $projectRoot
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
-    -RepetitionInterval (New-TimeSpan -Minutes 20) `
+    -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) `
     -RepetitionDuration (New-TimeSpan -Days 3650)
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal `
-    -Description 'Checks Google Sheet every 20 minutes and publishes at most one approved Facebook Group post.' -Force | Out-Null
+    -Description "Checks Google Sheet every $IntervalMinutes minutes and publishes at most one approved Facebook Group post." -Force | Out-Null
 
-Write-Host "Scheduled task installed: $TaskName"
+Write-Host "Scheduled task installed: $TaskName (every $IntervalMinutes minutes)"
 Write-Host 'It runs only in the signed-in Windows user session because Facebook uses a visible Chrome profile.'
 
