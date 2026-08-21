@@ -114,15 +114,17 @@ async function findNewPermalink(page, before, caption, groupId) {
   return null;
 }
 
-export async function launchFacebookContext(config, account) {
+export async function launchFacebookContext(config, account, { onScreen = false } = {}) {
   await fs.mkdir(account.profileDir, { recursive: true });
+  const args = ['--disable-notifications'];
+  if (!onScreen) args.push('--window-position=-32000,-32000');
   const context = await chromium.launchPersistentContext(account.profileDir, {
     channel: config.chromeChannel,
     headless: config.facebookHeadless,
     viewport: { width: 1440, height: 1000 },
     locale: 'en-GB',
     timezoneId: config.timezone,
-    args: ['--disable-notifications', '--window-position=-32000,-32000']
+    args
   });
   context.setDefaultTimeout(config.navigationTimeoutMs);
   context.setDefaultNavigationTimeout(config.navigationTimeoutMs);

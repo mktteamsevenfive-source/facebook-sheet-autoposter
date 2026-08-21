@@ -13,7 +13,7 @@ if (!accountArg) {
 const account = accounts.find((item) => item.sheetAccount.trim().toLowerCase() === accountArg.trim().toLowerCase());
 if (!account) throw new Error(`Account is not mapped in accounts.json: ${accountArg}`);
 
-const context = await launchFacebookContext(config, account);
+const context = await launchFacebookContext(config, account, { onScreen: true });
 const page = context.pages()[0] || await context.newPage();
 await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded' });
 console.log(`Chrome profile: ${account.profileDir}`);
