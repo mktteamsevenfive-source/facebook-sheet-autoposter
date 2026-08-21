@@ -129,6 +129,19 @@ export async function launchFacebookContext(config, account) {
   return context;
 }
 
+export async function checkAccountLogin(config, account) {
+  const context = await launchFacebookContext(config, account);
+  const page = context.pages()[0] || await context.newPage();
+  try {
+    await verifyFacebookAccount(page, account.expectedDisplayName);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: error.message };
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
 export async function prepareFacebookPost({ config, account, row, mediaPaths }) {
   const context = await launchFacebookContext(config, account);
   const page = context.pages()[0] || await context.newPage();

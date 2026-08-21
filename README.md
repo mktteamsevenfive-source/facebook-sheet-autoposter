@@ -63,6 +63,14 @@ npm run login:facebook -- "arunee tangkamolsuk"
 
 ค่าเริ่มต้นกำหนด `Thep Arthur` และ alias `sonthep simmalee` ให้ใช้ Chrome profile เดียวกัน โปรแกรมจะไม่สลับบัญชีให้อัตโนมัติ จึงล็อกอิน profile ที่ใช้ร่วมกันเพียงครั้งเดียวได้
 
+ก่อนเริ่มทำงาน (โดยเฉพาะถ้ามีหลายบัญชี) เช็คได้ว่า login ครบและ session ยังใช้ได้ทุกบัญชีไหมด้วย:
+
+```powershell
+npm run check:facebook
+```
+
+คำสั่งนี้เปิดแต่ละ Chrome profile แล้วตรวจว่ายัง login ค้างอยู่และชื่อโปรไฟล์ตรงกับ `expectedDisplayName` ไหม ไม่ได้ล็อกอินให้ ถ้าบัญชีไหนไม่พร้อมจะบอกให้รัน `npm run login:facebook` ใหม่
+
 ก่อนเปิดการตั้งเวลาของโปรแกรม ให้ปิด Automation เดิมใน Codex เพื่อไม่ให้สองระบบเลือกแถวเดียวกันพร้อมกัน
 
 ## 4. ทดสอบโดยไม่แก้ชีตและไม่เปิด Facebook
