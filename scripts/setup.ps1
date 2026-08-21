@@ -1,8 +1,24 @@
+param(
+    [string]$ServiceAccountKey
+)
+
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 
 function Test-CommandExists($name) {
     return [bool](Get-Command $name -ErrorAction SilentlyContinue)
+}
+
+function Find-Chrome {
+    $candidates = @(
+        (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Google\Chrome\Application\chrome.exe')
+    )
+    foreach ($path in $candidates) {
+        if ($path -and (Test-Path -LiteralPath $path)) { return $path }
+    }
+    return $null
 }
 
 Write-Host "== Facebook Sheet Autoposter setup ==" -ForegroundColor Cyan
@@ -16,6 +32,12 @@ if ($majorVersion -lt 20) {
     throw "Node.js $nodeVersion found, but 20+ is required."
 }
 Write-Host "Node.js $nodeVersion OK"
+
+if (Find-Chrome) {
+    Write-Host "Google Chrome OK"
+} else {
+    Write-Host "Google Chrome not found in the usual install locations - install it from https://www.google.com/chrome/ before logging in to Facebook." -ForegroundColor Yellow
+}
 
 Set-Location -LiteralPath $projectRoot
 
@@ -49,12 +71,35 @@ if (-not (Test-Path -LiteralPath $accountsPath)) {
     Write-Host "accounts.json already exists, left untouched"
 }
 
+$serviceAccountPath = Join-Path $projectRoot 'secrets\google-service-account.json'
+$haveServiceAccountKey = Test-Path -LiteralPath $serviceAccountPath
+if ($ServiceAccountKey) {
+    if (-not (Test-Path -LiteralPath $ServiceAccountKey)) { throw "ServiceAccountKey file not found: $ServiceAccountKey" }
+    Copy-Item -LiteralPath $ServiceAccountKey -Destination $serviceAccountPath -Force
+    Write-Host "Copied service account key to secrets\google-service-account.json"
+    $haveServiceAccountKey = $true
+} elseif ($haveServiceAccountKey) {
+    Write-Host "secrets\google-service-account.json already present, left untouched"
+}
+
 Write-Host "`n== Setup finished. Remaining steps (must be done by hand on this machine): ==" -ForegroundColor Cyan
-Write-Host "1. Put your Google OAuth client file at secrets\google-oauth-client.json"
-Write-Host "2. Run: npm run login:google"
-Write-Host "3. Edit accounts.json to match this machine's Facebook accounts"
-Write-Host '4. Run: npm run login:facebook -- "<Facebook display name>" for each account'
-Write-Host "5. Run: npm test"
-Write-Host "6. Run: npm run dry-run"
-Write-Host "7. Only after reviewing dry-run output, set PUBLISH_ENABLED=true in .env"
-Write-Host "8. Run: powershell -ExecutionPolicy Bypass -File .\scripts\install-task.ps1"
+if ($haveServiceAccountKey) {
+    Write-Host "1. Edit accounts.json to match this machine's Facebook accounts"
+    Write-Host '2. Run: npm run login:facebook -- "<Facebook display name>" for each account'
+    Write-Host "3. Run: npm run check:facebook  (confirms every account is signed in and ready)"
+    Write-Host "4. Run: npm test"
+    Write-Host "5. Run: npm run dry-run"
+    Write-Host "6. Only after reviewing dry-run output, set PUBLISH_ENABLED=true in .env"
+    Write-Host "7. Run: powershell -ExecutionPolicy Bypass -File .\scripts\install-task.ps1"
+} else {
+    Write-Host "1. Get secrets\google-service-account.json from whoever manages the Google Cloud project" -ForegroundColor Yellow
+    Write-Host "   (or re-run this script with -ServiceAccountKey <path to the downloaded json>)" -ForegroundColor Yellow
+    Write-Host "   The service account's email must be shared as Editor on the Google Sheet." -ForegroundColor Yellow
+    Write-Host "2. Edit accounts.json to match this machine's Facebook accounts"
+    Write-Host '3. Run: npm run login:facebook -- "<Facebook display name>" for each account'
+    Write-Host "4. Run: npm run check:facebook  (confirms every account is signed in and ready)"
+    Write-Host "5. Run: npm test"
+    Write-Host "6. Run: npm run dry-run"
+    Write-Host "7. Only after reviewing dry-run output, set PUBLISH_ENABLED=true in .env"
+    Write-Host "8. Run: powershell -ExecutionPolicy Bypass -File .\scripts\install-task.ps1"
+}

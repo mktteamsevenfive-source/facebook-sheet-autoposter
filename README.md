@@ -22,35 +22,62 @@ Facebook อาจเปลี่ยนหน้าเว็บได้ทุ�
 - **Posted URL อาจไม่ใช่ลิงก์จริงเสมอไป** — Facebook ไม่ได้ render permalink เป็น `<a>` ธรรมดาในหน้าฟีดปัจจุบันเสมอไป ถ้าระบบหาลิงก์ที่ตรงกับกลุ่มเป้าหมายไม่เจอ จะบันทึกข้อความ placeholder แทนการเดา (ปลอดภัยกว่าเดาแล้วได้ลิงก์ผิดกลุ่ม) — โพสต์สำเร็จจริงเสมอเมื่อ Posting Status = Posted ให้เข้าไปคัดลอกลิงก์จาก Facebook เองถ้าต้องการ
 - ใช้ lock file (`data\run.lock`) ป้องกันการรันซ้อนกัน — ห้ามรันสองอินสแตนซ์พร้อมกัน (ทั้งเพราะ Chrome profile เดียวกันเปิดซ้อนไม่ได้ และเสี่ยงโดน Facebook มองว่าเป็นบอทถ้าโพสต์หลายกลุ่มพร้อมกันจากบัญชีเดียว)
 
-## 1. ติดตั้ง
+## เครื่องใหม่ - ติดตั้งเร็วสุด
 
-ต้องมี Node.js 20 ขึ้นไปและ Google Chrome
+ต้องมี Node.js 20 ขึ้นไปและ Google Chrome ติดตั้งไว้ก่อน (สคริปต์ด้านล่างจะเช็คให้และเตือนถ้าไม่มี)
+
+```powershell
+git clone https://github.com/mktteamsevenfive-source/facebook-sheet-autoposter.git
+cd facebook-sheet-autoposter
+powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -ServiceAccountKey "C:\path\to\google-service-account.json"
+```
+
+`-ServiceAccountKey` ขอไฟล์ key จากคนที่ดูแล Google Cloud project (ดูหัวข้อ "เชื่อม Google" ด้านล่างถ้ายังไม่มี) สคริปต์จะติดตั้ง dependencies, สร้าง `secrets\`, `data\`, `logs\`, `.env`, `accounts.json` และ copy key ไปวางให้อัตโนมัติ ไม่ใส่ `-ServiceAccountKey` ก็ได้ถ้ายังไม่มีไฟล์ตอนนี้ แล้วค่อยวางเองทีหลัง
+
+ขั้นตอนที่เหลือซึ่ง**ทำอัตโนมัติให้ไม่ได้จริง ๆ** (ข้อจำกัดของ Facebook เอง ต้องนั่งหน้าเครื่องนั้น login เอง):
+
+```powershell
+# 1. แก้ accounts.json ให้ตรงกับบัญชี Facebook ที่ชีตใช้บนเครื่องนี้
+# 2. login ทีละบัญชี (จะมีหน้าต่าง Chrome เปิดขึ้นมาให้ login จริง)
+npm run login:facebook -- "<ชื่อบัญชีตามชีต>"
+
+# 3. เช็คว่า login ครบและ session ยังใช้ได้ทุกบัญชี
+npm run check:facebook
+
+# 4-6. ทดสอบก่อนใช้จริง แล้วค่อยเปิดเผยแพร่ + ตั้งเวลา (ดูหัวข้อ 4-6 ด้านล่าง)
+```
+
+จบแค่นี้ก็ใช้งานได้เลย — รายละเอียดแต่ละขั้นตอนอยู่ด้านล่าง
+
+## 1. ติดตั้ง (แบบละเอียด)
 
 ```powershell
 cd path\to\facebook-sheet-autoposter
 npm install
 ```
 
-หรือใช้สคริปต์ตั้งค่าเครื่องใหม่ในคำสั่งเดียว (ติดตั้ง dependencies, สร้าง `secrets\`, `data\`, `logs\`, `.env`, `accounts.json` ให้อัตโนมัติ):
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
-```
+หรือใช้สคริปต์ด้านบน (`setup.ps1`) ซึ่งทำสิ่งเดียวกันนี้ให้อัตโนมัติ
 
 ## 2. เชื่อม Google
 
-วิธี OAuth ที่แนะนำ:
+**แนะนำ: service_account** (ค่า default ใน `.env.example` แล้ว) — เหมาะกับหลายเครื่อง เพราะตั้งครั้งเดียวแล้ว copy ไฟล์ key ไปเครื่องอื่นได้เลย ไม่ต้องผ่าน Google Cloud Console ทุกเครื่อง:
+
+1. Google Cloud Console → โปรเจกต์เดิม → เปิด Google Sheets API กับ Google Drive API
+2. IAM & Admin → Service Accounts → สร้างใหม่ (ไม่ต้องเลือก role)
+3. เข้า service account → Keys → Add Key → Create new key → JSON (ดาวน์โหลดไฟล์)
+4. แชร์ Google Sheet (และโฟลเดอร์ Media ใน Drive ถ้ามี) ให้ email ของ service account เป็น **Editor**
+5. วางไฟล์ที่ `secrets\google-service-account.json` (หรือใช้ `-ServiceAccountKey` ตอนรัน `setup.ps1`)
+
+**ทางเลือกเดิม: OAuth** — ต้องทำซ้ำทุกเครื่อง เหมาะกับตอนทดสอบคนเดียว:
 
 1. สร้าง Google Cloud project และเปิด Google Sheets API กับ Google Drive API
-2. สร้าง OAuth Client ชนิด Desktop app
+2. สร้าง OAuth Client ชนิด Desktop app แล้วเพิ่มอีเมลตัวเองเป็น test user ใน OAuth consent screen (ไม่งั้นเจอ `access_denied`)
 3. ดาวน์โหลดไฟล์เป็น `secrets\google-oauth-client.json`
-4. รันคำสั่งนี้และล็อกอินบัญชีที่เข้าถึงชีตได้
+4. เปลี่ยน `GOOGLE_AUTH_MODE=oauth` ใน `.env` แล้วรัน:
 
 ```powershell
 npm run login:google
 ```
-
-อีกทางคือเปลี่ยน `GOOGLE_AUTH_MODE=service_account` ใน `.env`, วางไฟล์ที่ `secrets\google-service-account.json` และแชร์ทั้งชีตกับไฟล์/โฟลเดอร์ Media ใน Google Drive ให้ email ของ service account เข้าถึงได้
 
 ## 3. ล็อกอิน Facebook แยกตามบัญชี
 
