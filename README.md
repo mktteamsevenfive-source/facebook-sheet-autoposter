@@ -1,12 +1,50 @@
 # Facebook Sheet Autoposter
 
-โปรแกรม Windows สำหรับอ่าน Google Sheet `facebook_autopost` ทุก 20 นาที และเผยแพร่ได้สูงสุดหนึ่งแถวต่อรอบไปยัง Facebook Group ตามข้อมูลในชีต
+![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
+![Platform](https://img.shields.io/badge/platform-Windows-0078D6)
+![Type](https://img.shields.io/badge/type-internal%20tool-orange)
+
+โปรแกรม Windows สำหรับอ่าน Google Sheet ทุกรอบตามเวลาที่ตั้งไว้ และเผยแพร่ไปยัง Facebook Group ตามข้อมูลในชีต — ทีละแถว ปลอดภัยไว้ก่อน
+
+## สารบัญ
+
+- [ข้อจำกัดที่ต้องรู้](#ข้อจำกัดที่ต้องรู้)
+- [ระบบทำงานยังไง](#ระบบทำงานยังไง)
+- [พฤติกรรมสำคัญ](#พฤติกรรมสำคัญ)
+- [เครื่องใหม่: ติดตั้งเร็วสุด](#เครื่องใหม่-ติดตั้งเร็วสุด)
+- [1. ติดตั้ง (แบบละเอียด)](#1-ติดตั้ง-แบบละเอียด)
+- [2. เชื่อม Google](#2-เชื่อม-google)
+- [3. ล็อกอิน Facebook แยกตามบัญชี](#3-ล็อกอิน-facebook-แยกตามบัญชี)
+- [4. ทดสอบโดยไม่แก้ชีตและไม่เปิด Facebook](#4-ทดสอบโดยไม่แก้ชีตและไม่เปิด-facebook)
+- [5. เปิดการเผยแพร่จริง](#5-เปิดการเผยแพร่จริง)
+- [6. ตั้งเวลา](#6-ตั้งเวลา)
+- [การแก้ปัญหาเบื้องต้น](#การแก้ปัญหาเบื้องต้น)
 
 ## ข้อจำกัดที่ต้องรู้
 
-Meta ยกเลิก Groups API และสิทธิ์ `publish_to_groups` สำหรับทุกเวอร์ชันตั้งแต่ 22 เมษายน 2024 ดังนั้นการโพสต์เข้ากลุ่มตามรูปแบบชีตนี้ใช้ Chrome ที่ล็อกอินไว้ ไม่ใช่ Graph API โปรแกรมไม่ข้าม security check, checkpoint, restriction หรือกฎกลุ่ม และจะหยุดพร้อมบันทึก `Failed` เพื่อให้ตรวจด้วยคน
+> [!IMPORTANT]
+> Meta ยกเลิก Groups API และสิทธิ์ `publish_to_groups` สำหรับทุกเวอร์ชันตั้งแต่ 22 เมษายน 2024 ดังนั้นการโพสต์เข้ากลุ่มตามรูปแบบชีตนี้ใช้ **Chrome ที่ล็อกอินไว้จริง ไม่ใช่ Graph API** โปรแกรมไม่ข้าม security check, checkpoint, restriction หรือกฎกลุ่ม และจะหยุดพร้อมบันทึก `Failed` เพื่อให้ตรวจด้วยคน
+
+> [!CAUTION]
+> Repo นี้เป็น **public** บน GitHub ห้าม commit ไฟล์ `secrets\google-service-account.json` หรือ credential ใด ๆ เข้าไปเด็ดขาด (อยู่ใน `.gitignore` แล้ว แต่ระวังเวลาแจกจ่ายเป็น ZIP ให้ส่งเฉพาะช่องทางส่วนตัว)
 
 Facebook อาจเปลี่ยนหน้าเว็บได้ทุกเวลา ตัวเลือกหน้าเว็บจึงอาจต้องปรับในอนาคต ควรเริ่มด้วยกลุ่มทดสอบและตรวจเงื่อนไขการใช้งานของ Meta สำหรับบัญชีของคุณ
+
+## ระบบทำงานยังไง
+
+```mermaid
+flowchart LR
+    A[("Google Sheet")] -->|"อ่านทุกแถว"| B{"เข้าเกณฑ์ไหม?<br/>Date/Time/Approved/<br/>ยังไม่เคยโพสต์"}
+    B -->|"ไม่มีแถวพร้อม"| Z(["จบรอบ"])
+    B -->|"พร้อม 1 แถว"| C["เตรียมสื่อ<br/>(Drive / local cache)"]
+    C --> D["เปิด Chrome profile<br/>ของบัญชีนั้น"]
+    D --> E["โพสต์เข้า<br/>Facebook Group"]
+    E --> F["บันทึกผลกลับ Sheet<br/>(Posting Status, Posted URL)"]
+    F -->|"โหมด all: ไปแถวถัดไป"| B
+    F -->|"ปกติ: จบ 1 แถว/รอบ"| Z
+```
+
+Task Scheduler เรียกโปรแกรมนี้ซ้ำตามรอบที่ตั้งไว้ (ค่าเริ่มต้นทุก 20 นาที) แต่ละรอบเลือกและโพสต์ได้สูงสุด **หนึ่งแถว** เว้นแต่จะสั่งด้วยแฟลก `--all` ให้ไล่โพสต์ทุกแถวที่พร้อมในรอบเดียว (ยังคงทีละแถวเหมือนเดิม)
 
 ## พฤติกรรมสำคัญ
 
@@ -19,12 +57,15 @@ Facebook อาจเปลี่ยนหน้าเว็บได้ทุ�
 - ใช้ Caption ตรงตัว และใช้ Local Media Path ก่อนดาวน์โหลดใหม่
 - หยุด retry เมื่อ Error / Notes ยังเป็น security, restriction, warning, unusual activity, login, manual review หรือ group-rule problem (สูงสุด 2 attempts ต่อแถว)
 - ถ้ากดส่งแล้วแต่ผลลัพธ์ไม่ชัด จะใส่ marker ใน Posted URL และตั้ง `Submitted for review` เพื่อห้ามโพสต์ซ้ำ
-- **Posted URL อาจไม่ใช่ลิงก์จริงเสมอไป** — Facebook ไม่ได้ render permalink เป็น `<a>` ธรรมดาในหน้าฟีดปัจจุบันเสมอไป ถ้าระบบหาลิงก์ที่ตรงกับกลุ่มเป้าหมายไม่เจอ จะบันทึกข้อความ placeholder แทนการเดา (ปลอดภัยกว่าเดาแล้วได้ลิงก์ผิดกลุ่ม) — โพสต์สำเร็จจริงเสมอเมื่อ Posting Status = Posted ให้เข้าไปคัดลอกลิงก์จาก Facebook เองถ้าต้องการ
 - ใช้ lock file (`data\run.lock`) ป้องกันการรันซ้อนกัน — ห้ามรันสองอินสแตนซ์พร้อมกัน (ทั้งเพราะ Chrome profile เดียวกันเปิดซ้อนไม่ได้ และเสี่ยงโดน Facebook มองว่าเป็นบอทถ้าโพสต์หลายกลุ่มพร้อมกันจากบัญชีเดียว)
 
-## เครื่องใหม่ - ติดตั้งเร็วสุด
+> [!NOTE]
+> **Posted URL อาจไม่ใช่ลิงก์จริงเสมอไป** — Facebook ไม่ได้ render permalink เป็น `<a>` ธรรมดาในหน้าฟีดปัจจุบันเสมอไป ถ้าระบบหาลิงก์ที่ตรงกับกลุ่มเป้าหมายไม่เจอ จะบันทึกข้อความ placeholder แทนการเดา (ปลอดภัยกว่าเดาแล้วได้ลิงก์ผิดกลุ่ม) — **โพสต์สำเร็จจริงเสมอเมื่อ Posting Status = Posted** ให้เข้าไปคัดลอกลิงก์จาก Facebook เองถ้าต้องการ
 
-ไม่ต้องติดตั้ง Node.js หรือ Google Chrome ไว้ก่อนก็ได้ — สคริปต์ด้านล่างเช็คให้อัตโนมัติ ถ้าไม่มีจะติดตั้งให้เองผ่าน `winget` (อาจมีหน้าต่างขออนุญาต admin ของ Windows โผล่ขึ้นมา ให้กด Yes) ถ้าเครื่องไม่มี `winget` หรือติดตั้งอัตโนมัติไม่สำเร็จ จะบอกลิงก์ให้ไปโหลดเองแทน
+## เครื่องใหม่: ติดตั้งเร็วสุด
+
+> [!TIP]
+> ไม่ต้องติดตั้ง Node.js หรือ Google Chrome ไว้ก่อนก็ได้ — สคริปต์ด้านล่างเช็คให้อัตโนมัติ ถ้าไม่มีจะติดตั้งให้เองผ่าน `winget` (อาจมีหน้าต่างขออนุญาต admin ของ Windows โผล่ขึ้นมา ให้กด Yes) ถ้าเครื่องไม่มี `winget` หรือติดตั้งอัตโนมัติไม่สำเร็จ จะบอกลิงก์ให้ไปโหลดเองแทน
 
 **แบบไม่ต้องใช้ command line เลย** (เหมาะกับเครื่องเพื่อนร่วมทีมที่ไม่ถนัดสาย technical): แตกไฟล์ ZIP ของโปรเจกต์ วางไฟล์ `google-service-account.json` ไว้ในโฟลเดอร์เดียวกับ `install.bat` (ไม่ใส่ก็ได้ ค่อยวางทีหลัง) แล้ว**ดับเบิลคลิก `install.bat`** — จบ ติดตั้งให้ทั้งหมดอัตโนมัติเหมือนคำสั่งด้านล่าง
 
@@ -72,7 +113,8 @@ npm install
 4. แชร์ Google Sheet (และโฟลเดอร์ Media ใน Drive ถ้ามี) ให้ email ของ service account เป็น **Editor**
 5. วางไฟล์ที่ `secrets\google-service-account.json` (หรือใช้ `-ServiceAccountKey` ตอนรัน `setup.ps1`)
 
-**ทางเลือกเดิม: OAuth** — ต้องทำซ้ำทุกเครื่อง เหมาะกับตอนทดสอบคนเดียว:
+<details>
+<summary><strong>ทางเลือกเดิม: OAuth</strong> (ต้องทำซ้ำทุกเครื่อง เหมาะกับตอนทดสอบคนเดียว)</summary>
 
 1. สร้าง Google Cloud project และเปิด Google Sheets API กับ Google Drive API
 2. สร้าง OAuth Client ชนิด Desktop app แล้วเพิ่มอีเมลตัวเองเป็น test user ใน OAuth consent screen (ไม่งั้นเจอ `access_denied`)
@@ -82,6 +124,8 @@ npm install
 ```powershell
 npm run login:google
 ```
+
+</details>
 
 ## 3. ล็อกอิน Facebook แยกตามบัญชี
 
@@ -166,9 +210,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\remove-task.ps1
 
 ## การแก้ปัญหาเบื้องต้น
 
-- **`EPERM: operation not permitted, mkdir ...`** — `MEDIA_DIR` ใน `.env` ชี้ไปโฟลเดอร์ของ user คนละคนหรือ path ที่เครื่องนี้เขียนไม่ได้ ให้เปลี่ยนเป็น path ที่มีจริงบนเครื่องนี้ เช่น `./data/media`
-- **`Facebook account mismatch`** — ตรวจว่า `expectedDisplayName` ใน `accounts.json` ตรงกับชื่อโปรไฟล์ Facebook จริง ระบบเช็คจากข้อความทั้งหน้า ไม่ได้เช็คจาก heading เดียวอีกต่อไป (Facebook เปลี่ยน DOM บ่อย)
-- **`Facebook media control was not found` / `posting composer is unavailable`** — มักเกิดจาก Facebook โหลดหน้าไม่ทันตอนสคริปต์เช็คปุ่ม ลองรันใหม่อีกครั้ง ถ้ายังไม่หายให้ตรวจ screenshot ที่ `data\screenshots\` เพื่อดูว่าหน้าจริงเป็นอย่างไร
-- **Posted URL ผิด/ไม่ตรงกลุ่ม** — ระบบกรองเฉพาะลิงก์ที่อยู่ในกลุ่มเป้าหมายเท่านั้น ถ้าหาไม่เจอจะบันทึกข้อความอธิบายแทนการเดา ไม่ใช่ error
-- **Posting Status ค้างที่ `Failed` ทั้งที่โพสต์จริงสำเร็จแล้ว** — ตรวจ `data\screenshots\` และ `logs\scheduled-task.log` ประกอบ ถ้าสาเหตุเป็นบั๊กที่แก้แล้ว ให้ล้างค่า Posting Status, Attempt Count, Error / Notes ในชีตเพื่อให้ลองใหม่ได้
-- Facebook เปลี่ยนหน้าเว็บบ่อย ถ้า selector ในโค้ด (`src/facebook.js`) ใช้ไม่ได้อีกต่อไป ให้เปิด screenshot ที่บันทึกไว้เทียบกับโครงสร้างหน้าจริงเพื่อปรับ selector
+| อาการ | สาเหตุ / วิธีแก้ |
+|---|---|
+| `EPERM: operation not permitted, mkdir ...` | `MEDIA_DIR` ใน `.env` ชี้ไปโฟลเดอร์ของ user คนละคนหรือ path ที่เครื่องนี้เขียนไม่ได้ ให้เปลี่ยนเป็น path ที่มีจริงบนเครื่องนี้ เช่น `./data/media` |
+| `Facebook account mismatch` | ตรวจว่า `expectedDisplayName` ใน `accounts.json` ตรงกับชื่อโปรไฟล์ Facebook จริง ระบบเช็คจากข้อความทั้งหน้า ไม่ได้เช็คจาก heading เดียวอีกต่อไป (Facebook เปลี่ยน DOM บ่อย) |
+| `Facebook media control was not found` / `posting composer is unavailable` | มักเกิดจาก Facebook โหลดหน้าไม่ทันตอนสคริปต์เช็คปุ่ม ลองรันใหม่อีกครั้ง ถ้ายังไม่หายให้ตรวจ screenshot ที่ `data\screenshots\` เพื่อดูว่าหน้าจริงเป็นอย่างไร |
+| Posted URL ผิด / ไม่ตรงกลุ่ม | ระบบกรองเฉพาะลิงก์ที่อยู่ในกลุ่มเป้าหมายเท่านั้น ถ้าหาไม่เจอจะบันทึกข้อความอธิบายแทนการเดา ไม่ใช่ error |
+| Posting Status ค้างที่ `Failed` ทั้งที่โพสต์จริงสำเร็จแล้ว | ตรวจ `data\screenshots\` และ `logs\scheduled-task.log` ประกอบ ถ้าสาเหตุเป็นบั๊กที่แก้แล้ว ให้ล้างค่า Posting Status, Attempt Count, Error / Notes ในชีตเพื่อให้ลองใหม่ได้ |
+| Selector ในโค้ดใช้ไม่ได้แล้ว | Facebook เปลี่ยนหน้าเว็บบ่อย ให้เปิด screenshot ที่บันทึกไว้ใน `data\screenshots\` เทียบกับโครงสร้างหน้าจริงเพื่อปรับ selector ใน `src/facebook.js` |
