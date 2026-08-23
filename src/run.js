@@ -8,6 +8,8 @@ import { ensureMedia } from './media.js';
 import { prepareFacebookPost } from './facebook.js';
 import { displayTimestamp, sheetTimestamp } from './time.js';
 
+const MAX_ROWS_PER_RUN = 200; // safety cap for --all, not a realistic daily volume
+
 function log(event, details = {}) {
   console.log(JSON.stringify({ at: new Date().toISOString(), event, ...details }));
 }
@@ -63,39 +65,20 @@ async function writeTerminalState({ sheets, config, headers, row, startMs, updat
   await formatDurationCell(sheets, config, headers, row.__rowNumber);
 }
 
-async function main() {
-  const config = loadConfig();
-  const commandDryRun = process.argv.includes('--dry-run');
-  const live = config.publishEnabled && !commandDryRun;
-  const releaseLock = await acquireLock(config.dataDir);
+// Processes the already-selected row end to end: re-verify, prepare media, post (if live),
+// and record the outcome back to the Sheet. Returns 'posted' | 'dry-run-complete' | 'row-changed' | 'failed'.
+async function processRow({ config, live, accounts, knownAccounts, sheets, drive, headers, table, selected: initialSelected, excludedPostIds }) {
+  if (excludedPostIds) excludedPostIds.add(String(initialSelected['Post ID']));
+  const startMs = Date.now();
+  let selected = initialSelected;
   let prepared = null;
-  let selected = null;
-  let headers = null;
-  let sheets = null;
-  let drive = null;
-  let table = null;
-  let startMs = null;
   try {
-    const accounts = readAccountConfig(config);
-    const knownAccounts = new Set(accounts.map((item) => item.sheetAccount.trim().toLowerCase()));
-    const clients = await getGoogleClients(config);
-    sheets = clients.sheets;
-    drive = clients.drive;
-    startMs = Date.now(); // starts immediately before the first Sheet cell read
-    table = await readTable(sheets, config);
-    headers = table.headers;
-    selected = selectOldestEligible(table.rows, new Date(), config.timezone, knownAccounts);
-    if (!selected) {
-      log('no-eligible-row', { mode: live ? 'live' : 'dry-run', localTime: displayTimestamp(new Date(), config.timezone) });
-      return;
-    }
-
     const current = await readRow(sheets, config, headers, selected.__rowNumber);
     const currentRows = replaceRow(table.rows, current);
     const reason = eligibilityReason(current, currentRows, new Date(), config.timezone, knownAccounts);
     if (reason || String(current['Post ID']) !== String(selected['Post ID'])) {
       log('row-changed-before-processing', { row: selected.__rowNumber, postId: selected['Post ID'], reason: reason || 'Post ID changed' });
-      return;
+      return 'row-changed';
     }
     selected = current;
     log('selected', {
@@ -104,7 +87,7 @@ async function main() {
     });
     if (!live) {
       log('dry-run-complete', { note: 'No media, browser, Facebook, or Sheet writes were performed.' });
-      return;
+      return 'dry-run-complete';
     }
 
     const attempts = Number(selected['Attempt Count'] || 0);
@@ -138,9 +121,10 @@ async function main() {
       }
     });
     log('published', { row: selected.__rowNumber, postId: selected['Post ID'], status: result.status, postedUrl: result.postedUrl });
+    return 'posted';
   } catch (error) {
     log('run-failed', { message: error.message, stack: error.stack });
-    if (selected && headers && sheets && startMs) {
+    if (selected && headers) {
       const attempts = Number(selected['Attempt Count'] || 0);
       const submissionStarted = Boolean(error.submissionStarted);
       const now = sheetTimestamp(new Date(), config.timezone);
@@ -161,18 +145,59 @@ async function main() {
         log('sheet-failure-write-failed', { message: sheetError.message });
       });
     }
-    process.exitCode = 1;
+    return 'failed';
   } finally {
     if (prepared) await prepared.close().catch(() => {});
-    if (live && sheets && headers && table && drive) {
+    if (live) {
       const rows = table.rows.filter((row) => row.__rowNumber !== selected?.__rowNumber);
       await prefetchMissingMedia({ sheets, config, headers, rows, drive }).catch((error) => {
         log('media-prefetch-run-failed', { message: error.message });
       });
     }
-    await releaseLock();
   }
 }
 
-await main();
+async function main() {
+  const config = loadConfig();
+  const commandDryRun = process.argv.includes('--dry-run');
+  const processAll = process.argv.includes('--all');
+  const live = config.publishEnabled && !commandDryRun;
+  const releaseLock = await acquireLock(config.dataDir);
+  let hadFailure = false;
+  try {
+    const accounts = readAccountConfig(config);
+    const knownAccounts = new Set(accounts.map((item) => item.sheetAccount.trim().toLowerCase()));
+    const { sheets, drive } = await getGoogleClients(config);
+    // Dry-run never writes to the Sheet, so re-selecting would return the same row forever;
+    // track what --all has already shown so each pass moves on to the next one.
+    const excludedPostIds = live ? null : new Set();
+    let processedCount = 0;
 
+    for (let iteration = 0; iteration < MAX_ROWS_PER_RUN; iteration += 1) {
+      const table = await readTable(sheets, config);
+      const headers = table.headers;
+      const candidateRows = excludedPostIds
+        ? table.rows.filter((row) => !excludedPostIds.has(String(row['Post ID'])))
+        : table.rows;
+      const selected = selectOldestEligible(candidateRows, new Date(), config.timezone, knownAccounts);
+      if (!selected) {
+        log('no-eligible-row', { mode: live ? 'live' : 'dry-run', localTime: displayTimestamp(new Date(), config.timezone) });
+        break;
+      }
+
+      const outcome = await processRow({ config, live, accounts, knownAccounts, sheets, drive, headers, table, selected, excludedPostIds });
+      if (outcome === 'posted') processedCount += 1;
+      if (outcome === 'failed') hadFailure = true;
+      if (!processAll) break;
+    }
+    if (processAll) log('batch-complete', { processed: processedCount });
+  } catch (error) {
+    log('run-failed', { message: error.message, stack: error.stack });
+    hadFailure = true;
+  } finally {
+    await releaseLock();
+  }
+  if (hadFailure) process.exitCode = 1;
+}
+
+await main();
