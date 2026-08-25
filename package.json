@@ -12,6 +12,8 @@
     "login:google": "node src/login-google.js",
     "login:facebook": "node src/login-facebook.js",
     "check:facebook": "node src/check-facebook.js",
+    "split-groups": "node src/split-groups.js",
+    "classify-groups": "node src/classify-groups.js",
     "test": "node --test"
   },
   "engines": {
