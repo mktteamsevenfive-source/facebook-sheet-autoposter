@@ -29,11 +29,17 @@ async function assertNoBlockingIssue(page) {
 async function verifyFacebookAccount(page, expectedDisplayName) {
   await page.goto('https://www.facebook.com/me', { waitUntil: 'domcontentloaded' });
   await assertNoBlockingIssue(page);
-  const text = await pageText(page);
   const expected = cleanText(expectedDisplayName).trim();
-  if (!expected || !text.toLocaleLowerCase().includes(expected.toLocaleLowerCase())) {
-    throw new Error(`Facebook account mismatch: expected "${expected}" not found on profile page`);
+  // The profile header can still be a loading skeleton right after navigation,
+  // especially back-to-back with a prior post, so poll instead of checking once.
+  const deadline = Date.now() + 15000;
+  let text = '';
+  while (Date.now() < deadline) {
+    text = await pageText(page);
+    if (expected && text.toLocaleLowerCase().includes(expected.toLocaleLowerCase())) return;
+    await page.waitForTimeout(1000);
   }
+  throw new Error(`Facebook account mismatch: expected "${expected}" not found on profile page`);
 }
 
 async function openComposer(page) {
@@ -164,8 +170,9 @@ export async function prepareFacebookPost({ config, account, row, mediaPaths }) 
     const actualCaption = cleanText(await editor.innerText());
     if (actualCaption !== caption) throw new Error('Caption verification failed: Facebook composer text differs from the Sheet');
     // Typing a hashtag/mention can leave Facebook's suggestion popover open, which visually
-    // overlaps the Post button and blocks clicks on it. Blur (not click) to close it safely.
-    await editor.evaluate((node) => node.blur());
+    // overlaps the Post button and blocks clicks on it. Facebook only closes it on a real
+    // click outside the editor (blur alone isn't enough), so click empty dialog padding.
+    await dialog.click({ position: { x: 16, y: 16 } }).catch(() => {});
     await page.waitForTimeout(500);
 
     const postButton = dialog.getByRole('button', { name: /^(post|โพสต์)$/i }).last();
@@ -175,7 +182,11 @@ export async function prepareFacebookPost({ config, account, row, mediaPaths }) 
       async submit() {
         try {
           await assertNoBlockingIssue(page);
-          await postButton.click({ timeout: config.uploadTimeoutMs });
+          // A transient overlay (hashtag suggestions, a hover tooltip, etc.) can sit on top of
+          // the Post button and block a mouse click. Focus + Enter activates it without any
+          // pointer interaction, so it can't be blocked by whatever happens to be on top.
+          await postButton.focus({ timeout: config.uploadTimeoutMs });
+          await postButton.press('Enter', { timeout: config.uploadTimeoutMs });
           submissionStarted = true;
           await dialog.waitFor({ state: 'hidden', timeout: config.uploadTimeoutMs }).catch(() => {});
           const body = await pageText(page);
