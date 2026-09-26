@@ -5,10 +5,12 @@ import { getGoogleClients } from './google.js';
 import { eligibilityReason, selectOldestEligible } from './eligibility.js';
 import { formatDurationCell, readRow, readTable, updateRow } from './sheet.js';
 import { ensureMedia } from './media.js';
-import { prepareFacebookPost } from './facebook.js';
+import { createFacebookSession, prepareFacebookPost, resolvePostedUrl } from './facebook.js';
 import { displayTimestamp, sheetTimestamp } from './time.js';
 
 const MAX_ROWS_PER_RUN = 200; // safety cap for --all, not a realistic daily volume
+const PENDING_PERMALINK = 'Posted — permalink lookup pending';
+const PERMALINK_NOT_FOUND = 'Posted — permalink not found, check manually';
 
 function log(event, details = {}) {
   console.log(JSON.stringify({ at: new Date().toISOString(), event, ...details }));
@@ -35,13 +37,27 @@ function replaceRow(rows, row) {
   return rows.map((candidate) => candidate.__rowNumber === row.__rowNumber ? row : candidate);
 }
 
-async function prefetchMissingMedia({ sheets, config, headers, rows, drive }) {
+async function runPool(items, concurrency, worker) {
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  let index = 0;
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (index < items.length) {
+      const item = items[index];
+      index += 1;
+      await worker(item);
+    }
+  }));
+}
+
+async function prefetchMissingMedia({ sheets, config, headers, rows, drive, attempted }) {
   const candidates = rows.filter((row) =>
+    !attempted.has(row.__rowNumber) &&
     String(row['Local Media Path'] || '').trim() === '' &&
     String(row['Media URL 1'] || '').trim() !== '' &&
     String(row['Posted URL'] || '').trim() === ''
-  );
-  for (const row of candidates) {
+  ).slice(0, config.mediaPrefetchLookahead);
+  candidates.forEach((row) => attempted.add(row.__rowNumber));
+  await runPool(candidates, config.mediaPrefetchConcurrency, async (row) => {
     try {
       await ensureMedia({
         row,
@@ -56,7 +72,7 @@ async function prefetchMissingMedia({ sheets, config, headers, rows, drive }) {
     } catch (error) {
       log('media-prefetch-failed', { row: row.__rowNumber, postId: row['Post ID'], message: error.message });
     }
-  }
+  });
 }
 
 async function writeTerminalState({ sheets, config, headers, row, startMs, updates }) {
@@ -67,7 +83,7 @@ async function writeTerminalState({ sheets, config, headers, row, startMs, updat
 
 // Processes the already-selected row end to end: re-verify, prepare media, post (if live),
 // and record the outcome back to the Sheet. Returns 'posted' | 'dry-run-complete' | 'row-changed' | 'failed'.
-async function processRow({ config, live, accounts, knownAccounts, sheets, drive, headers, table, selected: initialSelected, excludedPostIds }) {
+async function processRow({ config, live, accounts, knownAccounts, sheets, drive, headers, table, selected: initialSelected, excludedPostIds, pendingPermalinks, getFacebookSession }) {
   if (excludedPostIds) excludedPostIds.add(String(initialSelected['Post ID']));
   const startMs = Date.now();
   let selected = initialSelected;
@@ -105,10 +121,12 @@ async function processRow({ config, live, accounts, knownAccounts, sheets, drive
     const account = accounts.find((item) => item.sheetAccount.trim().toLowerCase() === String(selected['Facebook Account']).trim().toLowerCase());
     if (!account) throw new Error(`No Facebook profile mapping for Sheet account: ${selected['Facebook Account']}`);
 
-    prepared = await prepareFacebookPost({ config, account, row: selected, mediaPaths });
+    const session = await getFacebookSession(account);
+    prepared = await prepareFacebookPost({ config, account, row: selected, mediaPaths, session });
     await updateRow(sheets, config, headers, selected.__rowNumber, { 'Posting Status': 'Posting' });
     const result = await prepared.submit();
     const postedAt = sheetTimestamp(new Date(), config.timezone);
+    const pendingLookup = result.status === 'Posted';
     await writeTerminalState({
       sheets, config, headers, row: selected, startMs,
       updates: {
@@ -116,11 +134,20 @@ async function processRow({ config, live, accounts, knownAccounts, sheets, drive
         'Attempt Count': attempts + 1,
         'Last Attempt At': '',
         'Posted At': postedAt,
-        'Posted URL': result.postedUrl,
+        'Posted URL': pendingLookup ? PENDING_PERMALINK : 'Submitted for review — Facebook did not provide a post URL',
         'Error / Notes': ''
       }
     });
-    log('published', { row: selected.__rowNumber, postId: selected['Post ID'], status: result.status, postedUrl: result.postedUrl });
+    if (pendingLookup && pendingPermalinks) {
+      pendingPermalinks.push({
+        rowNumber: selected.__rowNumber,
+        postId: selected['Post ID'],
+        groupUrl: selected['Facebook Group URL'],
+        caption: selected.Caption,
+        accountName: selected['Facebook Account']
+      });
+    }
+    log('published', { row: selected.__rowNumber, postId: selected['Post ID'], status: result.status });
     return 'posted';
   } catch (error) {
     log('run-failed', { message: error.message, stack: error.stack });
@@ -148,11 +175,31 @@ async function processRow({ config, live, accounts, knownAccounts, sheets, drive
     return 'failed';
   } finally {
     if (prepared) await prepared.close().catch(() => {});
-    if (live) {
-      const rows = table.rows.filter((row) => row.__rowNumber !== selected?.__rowNumber);
-      await prefetchMissingMedia({ sheets, config, headers, rows, drive }).catch((error) => {
-        log('media-prefetch-run-failed', { message: error.message });
-      });
+  }
+}
+
+// Second pass, run once every row has been posted: revisits each group page to look up
+// the permalink Facebook didn't hand back at post time, so this lookup never delays
+// posting the next row.
+async function resolvePendingPermalinks({ config, accounts, sheets, headers, pending, getFacebookSession }) {
+  for (const item of pending) {
+    const account = accounts.find((entry) => entry.sheetAccount.trim().toLowerCase() === String(item.accountName).trim().toLowerCase());
+    if (!account) {
+      log('permalink-resolve-skipped', { row: item.rowNumber, postId: item.postId, reason: 'no account mapping' });
+      continue;
+    }
+    try {
+      const session = await getFacebookSession(account);
+      const { ok, url, error } = await resolvePostedUrl({ config, account, row: { 'Facebook Group URL': item.groupUrl, Caption: item.caption }, session });
+      if (ok && url) {
+        await updateRow(sheets, config, headers, item.rowNumber, { 'Posted URL': url });
+        log('permalink-resolved', { row: item.rowNumber, postId: item.postId, url });
+      } else {
+        await updateRow(sheets, config, headers, item.rowNumber, { 'Posted URL': PERMALINK_NOT_FOUND });
+        log('permalink-not-found', { row: item.rowNumber, postId: item.postId, message: error?.message });
+      }
+    } catch (error) {
+      log('permalink-resolve-failed', { row: item.rowNumber, postId: item.postId, message: error.message });
     }
   }
 }
@@ -163,6 +210,19 @@ async function main() {
   const processAll = process.argv.includes('--all');
   const live = config.publishEnabled && !commandDryRun;
   const releaseLock = await acquireLock(config.dataDir);
+  const facebookSessions = new Map();
+  const getFacebookSession = async (account) => {
+    const key = account.profileDir;
+    if (!facebookSessions.has(key)) {
+      facebookSessions.set(key, createFacebookSession({ config, account }));
+    }
+    try {
+      return await facebookSessions.get(key);
+    } catch (error) {
+      facebookSessions.delete(key);
+      throw error;
+    }
+  };
   let hadFailure = false;
   try {
     const accounts = readAccountConfig(config);
@@ -171,30 +231,50 @@ async function main() {
     // Dry-run never writes to the Sheet, so re-selecting would return the same row forever;
     // track what --all has already shown so each pass moves on to the next one.
     const excludedPostIds = live ? null : new Set();
+    const attemptedMediaPrefetchRows = new Set();
+    const pendingPermalinks = [];
     let processedCount = 0;
+    const table = await readTable(sheets, config);
+    let headers = table.headers;
+    let remainingRows = table.rows;
 
     for (let iteration = 0; iteration < MAX_ROWS_PER_RUN; iteration += 1) {
-      const table = await readTable(sheets, config);
-      const headers = table.headers;
       const candidateRows = excludedPostIds
-        ? table.rows.filter((row) => !excludedPostIds.has(String(row['Post ID'])))
-        : table.rows;
+        ? remainingRows.filter((row) => !excludedPostIds.has(String(row['Post ID'])))
+        : remainingRows;
       const selected = selectOldestEligible(candidateRows, new Date(), config.timezone, knownAccounts);
       if (!selected) {
         log('no-eligible-row', { mode: live ? 'live' : 'dry-run', localTime: displayTimestamp(new Date(), config.timezone) });
         break;
       }
 
-      const outcome = await processRow({ config, live, accounts, knownAccounts, sheets, drive, headers, table, selected, excludedPostIds });
+      const currentTable = { headers, rows: remainingRows };
+      const outcome = await processRow({ config, live, accounts, knownAccounts, sheets, drive, headers, table: currentTable, selected, excludedPostIds, pendingPermalinks, getFacebookSession });
+      remainingRows = remainingRows.filter((row) => row.__rowNumber !== selected.__rowNumber);
       if (outcome === 'posted') processedCount += 1;
       if (outcome === 'failed') hadFailure = true;
+      if (live && processAll) {
+        await prefetchMissingMedia({ sheets, config, headers, rows: remainingRows, drive, attempted: attemptedMediaPrefetchRows }).catch((error) => {
+          log('media-prefetch-run-failed', { message: error.message });
+        });
+      }
       if (!processAll) break;
     }
     if (processAll) log('batch-complete', { processed: processedCount });
+
+    if (live && pendingPermalinks.length) {
+      log('permalink-lookup-start', { count: pendingPermalinks.length });
+      await resolvePendingPermalinks({ config, accounts, sheets, headers, pending: pendingPermalinks, getFacebookSession });
+      log('permalink-lookup-complete', { count: pendingPermalinks.length });
+    }
   } catch (error) {
     log('run-failed', { message: error.message, stack: error.stack });
     hadFailure = true;
   } finally {
+    await Promise.allSettled([...facebookSessions.values()].map(async (sessionPromise) => {
+      const session = await sessionPromise;
+      await session.close();
+    }));
     await releaseLock();
   }
   if (hadFailure) process.exitCode = 1;

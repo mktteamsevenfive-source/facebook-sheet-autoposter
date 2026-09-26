@@ -96,25 +96,19 @@ function normalizePermalink(value, groupId) {
   return normalized;
 }
 
-async function permalinkSet(page, groupId) {
-  const links = await page.locator('a[href*="/posts/"]').evaluateAll((nodes) => nodes.map((node) => node.href)).catch(() => []);
-  return new Set(links.map((link) => normalizePermalink(link, groupId)).filter(Boolean));
-}
-
-async function findNewPermalink(page, before, caption, groupId) {
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    await page.waitForTimeout(attempt === 0 ? 3000 : 5000);
-    const after = await permalinkSet(page, groupId);
-    const created = [...after].find((url) => !before.has(url));
-    if (created) return created;
-    const needle = cleanText(caption).trim().slice(0, 48);
-    if (needle) {
-      const article = page.locator('[role="article"]').filter({ hasText: needle }).first();
-      if (await article.isVisible().catch(() => false)) {
-        const href = await article.locator('a[href*="/posts/"]').first().getAttribute('href').catch(() => null);
-        const normalized = normalizePermalink(href, groupId);
-        if (normalized) return normalized;
-      }
+// Looks up a post's permalink by matching the start of its caption against articles
+// currently visible on the group page. Used by resolvePostedUrl in a later, separate
+// pass so permalink lookup never blocks the posting loop for the next row.
+async function findPermalinkByCaption(page, caption, groupId, { attempts = 4, waitMs = 4000 } = {}) {
+  const needle = cleanText(caption).trim().slice(0, 48);
+  if (!needle) return null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) await page.waitForTimeout(waitMs);
+    const article = page.locator('[role="article"]').filter({ hasText: needle }).first();
+    if (await article.isVisible().catch(() => false)) {
+      const href = await article.locator('a[href*="/posts/"]').first().getAttribute('href').catch(() => null);
+      const normalized = normalizePermalink(href, groupId);
+      if (normalized) return normalized;
     }
   }
   return null;
@@ -150,16 +144,11 @@ export async function checkAccountLogin(config, account) {
   }
 }
 
-export async function prepareFacebookPost({ config, account, row, mediaPaths }) {
-  const context = await launchFacebookContext(config, account);
-  const page = context.pages()[0] || await context.newPage();
+async function prepareFacebookPostOnPage({ config, page, row, mediaPaths, close }) {
   let submissionStarted = false;
   try {
-    await verifyFacebookAccount(page, account.expectedDisplayName);
-    const groupId = groupIdFromUrl(row['Facebook Group URL']);
     await page.goto(String(row['Facebook Group URL']), { waitUntil: 'domcontentloaded' });
     await assertNoBlockingIssue(page);
-    const before = await permalinkSet(page, groupId);
     const dialog = await openComposer(page);
     await assertNoBlockingIssue(page);
     await attachMedia(page, dialog, mediaPaths, config.uploadTimeoutMs);
@@ -191,25 +180,91 @@ export async function prepareFacebookPost({ config, account, row, mediaPaths }) 
           await dialog.waitFor({ state: 'hidden', timeout: config.uploadTimeoutMs }).catch(() => {});
           const body = await pageText(page);
           const submittedForReview = /submitted for review|pending post|waiting for admin approval|ส่งให้ตรวจสอบแล้ว|รอการอนุมัติ|โพสต์ที่รอดำเนินการ/i.test(body);
-          const actualUrl = await findNewPermalink(page, before, caption, groupId);
-          return {
-            status: submittedForReview ? 'Submitted for review' : 'Posted',
-            postedUrl: actualUrl || (submittedForReview
-              ? 'Submitted for review — Facebook did not provide a post URL'
-              : 'Processing — Facebook did not provide a post URL yet')
-          };
+          // Permalink lookup happens later, in a separate pass (see resolvePostedUrl below),
+          // so it never delays moving on to the next row while posting a batch.
+          return { status: submittedForReview ? 'Submitted for review' : 'Posted' };
         } catch (error) {
           error.submissionStarted = submissionStarted;
           await addFailureScreenshot(config, page, row, error);
           throw error;
         }
       },
-      async close() { await context.close(); }
+      close
     };
   } catch (error) {
     error.submissionStarted = submissionStarted;
     await addFailureScreenshot(config, page, row, error);
+    throw error;
+  }
+}
+
+export async function createFacebookSession({ config, account }) {
+  const context = await launchFacebookContext(config, account);
+  const page = context.pages()[0] || await context.newPage();
+  try {
+    await verifyFacebookAccount(page, account.expectedDisplayName);
+  } catch (error) {
     await context.close().catch(() => {});
     throw error;
+  }
+
+  return {
+    async preparePost({ row, mediaPaths }) {
+      return prepareFacebookPostOnPage({ config, page, row, mediaPaths, close: async () => {} });
+    },
+    async resolvePostedUrl({ row }) {
+      return resolvePostedUrlOnPage({ page, row });
+    },
+    async close() {
+      await context.close();
+    }
+  };
+}
+
+export async function prepareFacebookPost({ config, account, row, mediaPaths, session }) {
+  if (session) return session.preparePost({ row, mediaPaths });
+  const context = await launchFacebookContext(config, account);
+  const page = context.pages()[0] || await context.newPage();
+  try {
+    await verifyFacebookAccount(page, account.expectedDisplayName);
+    return await prepareFacebookPostOnPage({
+      config,
+      page,
+      row,
+      mediaPaths,
+      close: async () => { await context.close(); }
+    });
+  } catch (error) {
+    await context.close().catch(() => {});
+    throw error;
+  }
+}
+
+// Revisits a group page after posting is done to look up the permalink of a post that
+// was already submitted. Meant to run in a batch, after every row has been posted, so a
+// slow or failed lookup for one row never holds up posting the next one.
+async function resolvePostedUrlOnPage({ page, row }) {
+  try {
+    const groupId = groupIdFromUrl(row['Facebook Group URL']);
+    await page.goto(String(row['Facebook Group URL']), { waitUntil: 'domcontentloaded' });
+    await assertNoBlockingIssue(page);
+    const url = await findPermalinkByCaption(page, row.Caption, groupId);
+    return { ok: true, url };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+export async function resolvePostedUrl({ config, account, row, session }) {
+  if (session) return session.resolvePostedUrl({ row });
+  const context = await launchFacebookContext(config, account);
+  const page = context.pages()[0] || await context.newPage();
+  try {
+    await verifyFacebookAccount(page, account.expectedDisplayName);
+    return await resolvePostedUrlOnPage({ page, row });
+  } catch (error) {
+    return { ok: false, error };
+  } finally {
+    await context.close().catch(() => {});
   }
 }
