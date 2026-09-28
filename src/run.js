@@ -8,12 +8,22 @@ import { ensureMedia } from './media.js';
 import { createFacebookSession, prepareFacebookPost, resolvePostedUrl } from './facebook.js';
 import { displayTimestamp, sheetTimestamp } from './time.js';
 
-const MAX_ROWS_PER_RUN = 200; // safety cap for --all, not a realistic daily volume
+const MAX_ROWS_PER_RUN = 2000; // safety cap for --all, not a realistic daily volume
 const PENDING_PERMALINK = 'Posted — permalink lookup pending';
 const PERMALINK_NOT_FOUND = 'Posted — permalink not found, check manually';
 
 function log(event, details = {}) {
   console.log(JSON.stringify({ at: new Date().toISOString(), event, ...details }));
+}
+
+function processIsRunning(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
 }
 
 async function acquireLock(dataDir) {
@@ -24,7 +34,13 @@ async function acquireLock(dataDir) {
     handle = await fs.open(lockPath, 'wx');
     await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`);
   } catch (error) {
-    if (error.code === 'EEXIST') throw new Error(`Another run is active (${lockPath}).`);
+    if (error.code === 'EEXIST') {
+      const contents = await fs.readFile(lockPath, 'utf8').catch(() => '');
+      const lockPid = Number.parseInt(contents.split(/\r?\n/, 1)[0], 10);
+      if (processIsRunning(lockPid)) throw new Error(`Another run is active (${lockPath}).`);
+      await fs.unlink(lockPath).catch(() => {});
+      return acquireLock(dataDir);
+    }
     throw error;
   }
   return async () => {
@@ -49,7 +65,7 @@ async function runPool(items, concurrency, worker) {
   }));
 }
 
-async function prefetchMissingMedia({ sheets, config, headers, rows, drive, attempted }) {
+async function prefetchMissingMedia({ sheets, config, headers, rows, drive, attempted, mediaCache }) {
   const candidates = rows.filter((row) =>
     !attempted.has(row.__rowNumber) &&
     String(row['Local Media Path'] || '').trim() === '' &&
@@ -63,6 +79,7 @@ async function prefetchMissingMedia({ sheets, config, headers, rows, drive, atte
         row,
         drive,
         mediaDir: config.mediaDir,
+        mediaCache,
         largeFileBytes: config.largeMediaThresholdBytes,
         onLocalPath: async (localPath) => {
           await updateRow(sheets, config, headers, row.__rowNumber, { 'Local Media Path': localPath });
@@ -83,7 +100,7 @@ async function writeTerminalState({ sheets, config, headers, row, startMs, updat
 
 // Processes the already-selected row end to end: re-verify, prepare media, post (if live),
 // and record the outcome back to the Sheet. Returns 'posted' | 'dry-run-complete' | 'row-changed' | 'failed'.
-async function processRow({ config, live, accounts, knownAccounts, sheets, drive, headers, table, selected: initialSelected, excludedPostIds, pendingPermalinks, getFacebookSession }) {
+async function processRow({ config, live, accounts, knownAccounts, sheets, drive, headers, table, selected: initialSelected, excludedPostIds, pendingPermalinks, getFacebookSession, mediaCache }) {
   if (excludedPostIds) excludedPostIds.add(String(initialSelected['Post ID']));
   const startMs = Date.now();
   let selected = initialSelected;
@@ -111,6 +128,7 @@ async function processRow({ config, live, accounts, knownAccounts, sheets, drive
       row: selected,
       drive,
       mediaDir: config.mediaDir,
+      mediaCache,
       largeFileBytes: config.largeMediaThresholdBytes,
       onLocalPath: async (localPath) => {
         await updateRow(sheets, config, headers, selected.__rowNumber, { 'Local Media Path': localPath });
@@ -232,9 +250,15 @@ async function main() {
     // track what --all has already shown so each pass moves on to the next one.
     const excludedPostIds = live ? null : new Set();
     const attemptedMediaPrefetchRows = new Set();
+    const mediaCache = new Map();
     const pendingPermalinks = [];
     let processedCount = 0;
     const table = await readTable(sheets, config);
+    for (const row of table.rows) {
+      const mediaUrl = String(row['Media URL 1'] || '').trim();
+      const localPath = String(row['Local Media Path'] || '').trim();
+      if (mediaUrl && localPath && !mediaCache.has(mediaUrl)) mediaCache.set(mediaUrl, Promise.resolve(localPath));
+    }
     let headers = table.headers;
     let remainingRows = table.rows;
 
@@ -249,12 +273,12 @@ async function main() {
       }
 
       const currentTable = { headers, rows: remainingRows };
-      const outcome = await processRow({ config, live, accounts, knownAccounts, sheets, drive, headers, table: currentTable, selected, excludedPostIds, pendingPermalinks, getFacebookSession });
+      const outcome = await processRow({ config, live, accounts, knownAccounts, sheets, drive, headers, table: currentTable, selected, excludedPostIds, pendingPermalinks, getFacebookSession, mediaCache });
       remainingRows = remainingRows.filter((row) => row.__rowNumber !== selected.__rowNumber);
       if (outcome === 'posted') processedCount += 1;
       if (outcome === 'failed') hadFailure = true;
       if (live && processAll) {
-        await prefetchMissingMedia({ sheets, config, headers, rows: remainingRows, drive, attempted: attemptedMediaPrefetchRows }).catch((error) => {
+        await prefetchMissingMedia({ sheets, config, headers, rows: remainingRows, drive, attempted: attemptedMediaPrefetchRows, mediaCache }).catch((error) => {
           log('media-prefetch-run-failed', { message: error.message });
         });
       }

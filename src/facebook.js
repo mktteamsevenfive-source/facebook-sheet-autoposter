@@ -51,10 +51,19 @@ async function openComposer(page) {
     if (found) { opener = candidate; break; }
   }
   if (!opener) throw new Error('Facebook group-rule problem: posting composer is unavailable; verify membership and posting permission');
-  await opener.click();
-  const dialog = page.getByRole('dialog', { name: /create (?:a )?(?:public )?post|สร้างโพสต์/i }).first();
-  await dialog.waitFor({ state: 'visible', timeout: 30000 });
-  return dialog;
+  const namedDialog = page.getByRole('dialog', { name: /create (?:a )?(?:public )?post|สร้างโพสต์/i }).first();
+  const editorDialog = page.locator('[role="dialog"]').filter({ has: page.locator('[contenteditable="true"]') }).first();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await opener.scrollIntoViewIfNeeded().catch(() => {});
+    await opener.click({ force: attempt > 0 });
+    const dialog = await Promise.any([
+      namedDialog.waitFor({ state: 'visible', timeout: 10000 }).then(() => namedDialog),
+      editorDialog.waitFor({ state: 'visible', timeout: 10000 }).then(() => editorDialog)
+    ]).catch(() => null);
+    if (dialog) return dialog;
+    await page.waitForTimeout(1000);
+  }
+  throw new Error('Facebook post composer did not open after 3 attempts');
 }
 
 async function attachMedia(page, dialog, mediaPaths, timeoutMs) {

@@ -4,6 +4,16 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
 const MEDIA_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.mov', '.m4v', '.avi']);
+const MEDIA_TYPE_EXTENSIONS = new Map([
+  ['image/jpeg', '.jpg'],
+  ['image/png', '.png'],
+  ['image/gif', '.gif'],
+  ['image/webp', '.webp'],
+  ['video/mp4', '.mp4'],
+  ['video/quicktime', '.mov'],
+  ['video/x-m4v', '.m4v'],
+  ['video/x-msvideo', '.avi']
+]);
 
 function sanitizeFileName(value) {
   const cleaned = String(value || 'media').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim();
@@ -101,7 +111,13 @@ async function downloadFromDrive(drive, url, mediaDir, postId) {
 async function downloadHttp(url, mediaDir, postId) {
   const response = await fetch(url, { redirect: 'follow' });
   if (!response.ok || !response.body) throw new Error(`Media download failed: HTTP ${response.status}`);
-  const sourceName = path.basename(new URL(response.url).pathname) || `post-${postId}`;
+  const encodedName = path.basename(new URL(response.url).pathname);
+  let sourceName = encodedName ? decodeURIComponent(encodedName) : `post-${postId}`;
+  if (!MEDIA_EXTENSIONS.has(path.extname(sourceName).toLowerCase())) {
+    const contentType = response.headers?.get?.('content-type')?.split(';', 1)[0].trim().toLowerCase();
+    const extension = MEDIA_TYPE_EXTENSIONS.get(contentType);
+    if (extension) sourceName += extension;
+  }
   const target = path.join(mediaDir, sanitizeFileName(sourceName));
   if (!fs.existsSync(target)) {
     const temporary = `${target}.${process.pid}.part`;
@@ -116,22 +132,50 @@ async function downloadHttp(url, mediaDir, postId) {
   return target;
 }
 
-export async function ensureMedia({ row, drive, mediaDir, onLocalPath, largeFileBytes = 100 * 1024 * 1024 }) {
+export async function ensureMedia({ row, drive, mediaDir, onLocalPath, mediaCache = new Map(), largeFileBytes = 100 * 1024 * 1024 }) {
   const original = String(row['Local Media Path'] || '').trim();
   const reused = await existingMedia(original, mediaDir, largeFileBytes);
+  const mediaUrl = String(row['Media URL 1'] || '').trim();
   if (reused.length) {
     const resolved = reused.join(';');
     if (resolved !== original) await onLocalPath(resolved);
+    if (mediaUrl && !mediaCache.has(mediaUrl)) mediaCache.set(mediaUrl, Promise.resolve(resolved));
     return reused;
   }
-  const mediaUrl = String(row['Media URL 1'] || '').trim();
   if (!mediaUrl) return [];
-  await fsp.mkdir(mediaDir, { recursive: true });
+
+  let cached = mediaCache.get(mediaUrl);
+  while (cached) {
+    const cachedPath = await cached;
+    const cachedFiles = await existingMedia(cachedPath, mediaDir, largeFileBytes);
+    if (cachedFiles.length) {
+      await onLocalPath(cachedPath);
+      return cachedFiles;
+    }
+    if (mediaCache.get(mediaUrl) === cached) mediaCache.delete(mediaUrl);
+    cached = mediaCache.get(mediaUrl);
+  }
+
   const postId = String(row['Post ID'] || row.__rowNumber);
-  const localPath = await downloadFromDrive(drive, mediaUrl, mediaDir, postId)
-    || await downloadHttp(mediaUrl, mediaDir, postId);
-  const files = await existingMedia(localPath, mediaDir, largeFileBytes);
-  if (!files.length) throw new Error(`No supported media files were found at ${localPath}`);
-  await onLocalPath(localPath);
-  return files;
+  const download = (async () => {
+    await fsp.mkdir(mediaDir, { recursive: true });
+    const localPath = await downloadFromDrive(drive, mediaUrl, mediaDir, postId)
+      || await downloadHttp(mediaUrl, mediaDir, postId);
+    const files = await existingMedia(localPath, mediaDir, largeFileBytes);
+    if (!files.length) throw new Error(`No supported media files were found at ${localPath}`);
+    return { localPath, files };
+  })();
+  const cachedPath = download.then(({ localPath }) => localPath);
+  // The initiating caller awaits `download`; prevent this derived cache promise
+  // from becoming an unhandled rejection when a background prefetch fails.
+  cachedPath.catch(() => {});
+  mediaCache.set(mediaUrl, cachedPath);
+  try {
+    const { localPath, files } = await download;
+    await onLocalPath(localPath);
+    return files;
+  } catch (error) {
+    mediaCache.delete(mediaUrl);
+    throw error;
+  }
 }
